@@ -245,6 +245,24 @@
         .hidden {
             display: none;
         }
+
+        .status-message {
+            text-align: center;
+            padding: 10px;
+            margin-bottom: 15px;
+            border-radius: 8px;
+            font-size: 14px;
+        }
+
+        .status-moving {
+            background-color: #2ed573;
+            color: white;
+        }
+
+        .status-stopped {
+            background-color: #57606f;
+            color: white;
+        }
     </style>
 </head>
 <body>
@@ -259,6 +277,11 @@
         </button>
 
         <div id="mainApp" class="hidden">
+            <!-- Movement Status -->
+            <div id="statusMsg" class="status-message status-stopped">
+                🚶 Status: Stand by...
+            </div>
+
             <div class="timer-heart-container">
                 <div class="timer-box">
                     <label>Time Active</label>
@@ -266,7 +289,7 @@
                 </div>
                 <div class="heart-box">
                     <span class="heart-icon">❤️</span>
-                    <span class="bpm" id="heartRate">0 BPM</span>
+                    <span class="bpm" id="heartRate">-- BPM</span>
                 </div>
             </div>
 
@@ -324,7 +347,7 @@
     </div>
 
     <script>
-        // JAVASCRIPT LOGIC
+        // JAVASCRIPT LOGIC - FIXED!
 
         // Variables
         let steps = 0;
@@ -339,6 +362,10 @@
         
         let lastPosition = null;
         let watchId = null;
+        
+        // Movement detection
+        let lastMoveTime = 0;
+        const MOVEMENT_THRESHOLD = 5; // meters - minimum movement to count as step
 
         // Request Location Permission
         function requestPermissions() {
@@ -373,7 +400,7 @@
                     document.getElementById('location').textContent = `${lat}, ${lng}`;
 
                     // Calculate distance
-                    if (lastPosition) {
+                    if (lastPosition && isTracking) {
                         const R = 6371; // Radius of the earth in km
                         const dLat = deg2rad(position.coords.latitude - lastPosition.lat);
                         const dLon = deg2rad(position.coords.longitude - lastPosition.lng);
@@ -382,10 +409,34 @@
                             Math.cos(deg2rad(lastPosition.lat)) * Math.cos(deg2rad(position.coords.latitude)) * 
                             Math.sin(dLon/2) * Math.sin(dLon/2);
                         const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-                        const d = R * c;
-                        distanceKm += d;
+                        const distanceMoved = R * c; // in km
                         
-                        updateStats();
+                        // Only update if moved more than threshold (5 meters)
+                        if (distanceMoved > 0.00005) { // ~5 meters in km
+                            distanceKm += distanceMoved;
+                            lastMoveTime = Date.now();
+                            
+                            // Update status to moving
+                            document.getElementById('statusMsg').textContent = "🚶 Moving...";
+                            document.getElementById('statusMsg').className = "status-message status-moving";
+                            
+                            // Count steps based on distance (average step = 0.75 meters)
+                            const stepsGained = Math.floor(distanceMoved * 1000 / 0.75);
+                            if (stepsGained > 0) {
+                                steps += stepsGained;
+                                
+                                // Calculate calories
+                                calories = Math.round(steps * 0.04);
+                                
+                                // Update highest record
+                                if (steps > highestRecord) {
+                                    highestRecord = steps;
+                                    document.getElementById('highestRecord').textContent = `${highestRecord} Steps`;
+                                }
+                            }
+                            
+                            updateStats();
+                        }
                     }
 
                     lastPosition = {
@@ -398,6 +449,17 @@
                 },
                 options
             );
+            
+            // Check if stopped moving every 3 seconds
+            setInterval(() => {
+                if (isTracking && lastMoveTime > 0) {
+                    const timeSinceMove = Date.now() - lastMoveTime;
+                    if (timeSinceMove > 3000) { // No movement for 3 seconds
+                        document.getElementById('statusMsg').textContent = "⏸️ Stopped - Start walking!";
+                        document.getElementById('statusMsg').className = "status-message status-stopped";
+                    }
+                }
+            }, 1000);
         }
 
         function deg2rad(deg) {
@@ -415,6 +477,8 @@
                 clearInterval(heartRateInterval);
                 btn.innerHTML = "▶ Start Workout";
                 btn.classList.remove('stop');
+                document.getElementById('statusMsg').textContent = "⏸️ Workout paused";
+                document.getElementById('statusMsg').className = "status-message status-stopped";
             } else {
                 // Start
                 isTracking = true;
@@ -422,6 +486,8 @@
                 startHeartRateSimulation();
                 btn.innerHTML = "⏹ Stop Workout";
                 btn.classList.add('stop');
+                document.getElementById('statusMsg').textContent = "🚶 Ready to track - Start walking!";
+                document.getElementById('statusMsg').className = "status-message status-moving";
             }
         }
 
@@ -441,27 +507,15 @@
             return num.toString().padStart(2, '0');
         }
 
-        // Heart Rate Simulation (Browser can't read real heart rate)
+        // Heart Rate Simulation (browsers can't read real heart rate)
         function startHeartRateSimulation() {
             heartRateInterval = setInterval(() => {
                 if (!isTracking) return;
-                // Random heart rate between 65-140
-                heartRate = Math.floor(Math.random() * 76) + 65;
+                
+                // Only update heart rate periodically, don't auto-increment steps
+                heartRate = Math.floor(Math.random() * 30) + 70; // 70-100 BPM range
                 document.getElementById('heartRate').textContent = `${heartRate} BPM`;
                 
-                // Simulate steps when tracking
-                steps += Math.floor(Math.random() * 5) + 1;
-                
-                // Calculate calories (approx 0.04 cal per step)
-                calories = Math.round(steps * 0.04);
-                
-                // Update highest record
-                if (steps > highestRecord) {
-                    highestRecord = steps;
-                    document.getElementById('highestRecord').textContent = `${highestRecord} Steps`;
-                }
-                
-                updateStats();
             }, 2000);
         }
 
@@ -472,7 +526,7 @@
             document.getElementById('distance').textContent = `${distanceKm.toFixed(2)} km`;
             
             // Update Chart Bars (scaled to max 100)
-            const stepsPercent = Math.min(steps, 100);
+            const stepsPercent = Math.min(steps / 10, 100); // Scale: 1000 steps = 100%
             const caloriesPercent = Math.min(calories, 100);
             const distancePercent = Math.min(distanceKm * 10, 100);
             
